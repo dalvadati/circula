@@ -1,0 +1,83 @@
+<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="referrer" content="no-referrer"><title>Dalva Circula · Leitor</title><style>
+*{box-sizing:border-box}body{margin:0;background:#f4f7fb;color:#10223a;font:17px Arial,sans-serif}header{background:linear-gradient(135deg,#073b6f,#0b5c96);color:white;padding:20px}header h1{font-size:20px;margin:0}header p{font-size:14px;margin:8px 0 0}main{max-width:720px;margin:auto;padding:12px}.modes{display:grid;grid-template-columns:1fr 1fr;gap:12px}button{font:inherit;min-height:54px;border:1px solid #bfd0dd;border-radius:12px;background:white;color:#073b6f;padding:14px;cursor:pointer}button:disabled{opacity:.5;cursor:wait}.active{background:#073b6f;color:white}.camera{position:relative;margin:14px 0;background:#122234;border-radius:18px;overflow:hidden;aspect-ratio:4/3}video{width:100%;height:100%;object-fit:cover}.guide{position:absolute;inset:16%;border:3px solid #fff9;border-radius:15px;pointer-events:none}.status{padding:20px;border-radius:14px;background:white;text-align:center;font-weight:700;min-height:85px;display:grid;place-items:center}.ok{background:#dff6e8;color:#17663e}.warn{background:#fff0c5;color:#755100}.bad{background:#ffe5e2;color:#94251b}#actions{display:grid;gap:8px;margin-top:10px}.tools{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}.tools button{flex:1;font-size:14px}iframe{position:absolute;width:1px;height:1px;border:0;left:-10px}small{display:block;text-align:center;color:#526779;margin:16px 0;font-size:12px}@media(max-width:480px){header{padding:16px}.camera{aspect-ratio:1/1}main{padding:10px}}
+</style></head><body><header><h1>E.M. Profª Dalva Dati Ruivo</h1><p>Dalva Circula · Entrada e saída</p></header><main><div class="modes"><button id="entry">ENTRADA</button><button id="exit">SAÍDA</button></div><div class="camera"><video id="video" autoplay muted playsinline></video><div class="guide"></div></div><div id="status" class="status" role="status" aria-live="polite">Conectando…</div><div id="actions"></div><div class="tools"><button id="start">Iniciar câmera</button><button id="switch">Trocar câmera</button><button id="forget">Desvincular aparelho</button></div><small>Posicione uma carteirinha por vez. Afaste o QR após a leitura.</small></main><script src="jsQR.js"></script><script>
+'use strict';
+// ÚNICA CONFIGURAÇÃO PÚBLICA: URL /exec da NOVA implantação do Dalva Circula.
+const APPS_SCRIPT_URL='https://script.google.com/a/macros/educaita.com.br/s/AKfycbzjGodkIYc5bOvKAPA5vwFzX3kOVSBu4mBNwi9VIlh0LR_8EK07sksL8chklHGvXw-06Q/exec';
+const $=id=>document.getElementById(id),video=$('video'),status=$('status'),actions=$('actions');
+const randomId=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),x=>x.toString(16).padStart(2,'0')).join('');
+let device=localStorage.getItem('dalva_device_circula')||'';
+const paired=new URLSearchParams(location.hash.slice(1)).get('device');
+if(paired&&/^[a-f0-9]{64}$/.test(paired)){device=paired;localStorage.setItem('dalva_device_circula',device);}
+history.replaceState(null,'',location.pathname+location.search);
+let mode=localStorage.getItem('dalva_mode_circula')==='SAÍDA'?'SAÍDA':'ENTRADA';
+let stream=null,detector=null,ready=false,bridge=null,bridgeOrigin='',busy=false,pending=null,timer=null,facing='environment',lastToken='',emptySince=0,loopId=0;
+const channel=randomId();
+function say(text,cls=''){status.textContent=text;status.className='status '+cls;}
+function buttons(items){actions.replaceChildren();items.forEach(([text,fn])=>{const b=document.createElement('button');b.textContent=text;b.onclick=fn;actions.appendChild(b);});}
+function modeUi(){ $('entry').classList.toggle('active',mode==='ENTRADA');$('exit').classList.toggle('active',mode==='SAÍDA');}
+function setMode(m){if(busy)return;mode=m;localStorage.setItem('dalva_mode_circula',mode);modeUi();}
+$('entry').onclick=()=>setMode('ENTRADA');$('exit').onclick=()=>setMode('SAÍDA');modeUi();
+function reset(){clearTimeout(timer);pending=null;busy=false;actions.replaceChildren();$('entry').disabled=$('exit').disabled=false;say(ready&&device?'Pronto para ler · '+mode:'Aparelho não habilitado','');}
+function submit(action=''){
+ if(!pending||!bridge)return;
+ if(action==='CONFIRMAR')pending.forceNoEntry=true;
+ pending.action=action;buttons([]);say('Processando…');
+ bridge.postMessage({type:'SCAN',channel,payload:pending},bridgeOrigin);
+ clearTimeout(timer);timer=setTimeout(()=>{say('Resposta não recebida. Confira o mesmo registro.','warn');buttons([['Consultar novamente',()=>submit(pending.action)],['Interromper leitura',reset]]);},30000);
+}
+const texts={DUPLICADO:'Movimento já registrado.',TOKEN_INVALIDO:'QR inválido ou credencial inexistente.',CARTEIRINHA_PERDIDA:'Carteirinha perdida. Acesso bloqueado.',CARTEIRINHA_SUBSTITUIDA:'Carteirinha substituída. Acesso bloqueado.',CARTEIRINHA_INATIVADA:'Carteirinha inativada. Procure a secretaria.',AUTORIZACAO_PENDENTE:'Saída antecipada sem autorização cadastrada.',APARELHO_NAO_AUTORIZADO:'Aparelho não habilitado. Solicite um novo link à gestão.',HORARIOS_NAO_CONFIGURADOS:'A gestão precisa configurar os horários.',FALHA_VERIFICAR:'Não foi possível confirmar o resultado. Consulte novamente.',OCUPADO:'Sistema ocupado. Consulte novamente.'};
+function handle(r){
+ clearTimeout(timer);
+ if(r.code==='CONFIRMAR_SAIDA_SEM_ENTRADA'){say('Não há entrada registrada. Confirmar a saída?','warn');buttons([['Confirmar saída sem entrada',()=>submit('CONFIRMAR')],['Cancelar',reset]]);return;}
+ if(['FALHA_VERIFICAR','OCUPADO'].includes(r.code)){say(texts[r.code],'warn');buttons([['Consultar novamente',()=>submit(pending.action)],['Cancelar',reset]]);return;}
+ say((r.testMode?'TESTE · ':'')+(r.ok?'Registrado · '+r.code:texts[r.code]||'Registro não autorizado.'),r.ok?'ok':r.code==='DUPLICADO'?'warn':'bad');
+ timer=setTimeout(reset,r.ok?1400:2800);
+}
+window.addEventListener('message',e=>{
+ const d=e.data;if(!d||d.channel!==channel)return;
+ if(!/^https:\/\/[a-z0-9-]+\.googleusercontent\.com$/.test(e.origin)&&e.origin!=='https://script.google.com')return;
+ if(d.type==='READY'&&!bridge){bridge=e.source;bridgeOrigin=e.origin;ready=true;reset();if(device)startCamera();return;}
+ if(e.source!==bridge||e.origin!==bridgeOrigin||d.type!=='RESULT'||!pending||d.requestId!==pending.requestId)return;
+ handle(d.result||{});
+});
+function stopCamera(){++loopId;if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;}
+async function startCamera(){
+ if(!device){say('Abra neste aparelho o link de habilitação gerado pela gestão.','warn');return;}
+ if(!ready){say('Aguardando conexão com o controle.','warn');return;}
+ stopCamera();const generation=loopId;
+ try{
+  stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:facing},width:{ideal:1280},height:{ideal:720}},audio:false});
+  video.srcObject=stream;await video.play();
+  detector=null;
+  if('BarcodeDetector' in window){try{const formats=await BarcodeDetector.getSupportedFormats();if(formats.includes('qr_code'))detector=new BarcodeDetector({formats:['qr_code']});}catch(e){}}
+  if(!detector&&typeof jsQR!=='function')throw new Error('Leitor indisponível');
+  if(!busy)reset();decodeLoop(generation);
+ }catch(e){stopCamera();say('Câmera indisponível. Permita o acesso à câmera e toque em Iniciar câmera.','bad');}
+}
+const canvas=document.createElement('canvas'),ctx=canvas.getContext('2d',{willReadFrequently:true});
+async function decodeLoop(generation){
+ if(generation!==loopId||!stream)return;
+ let token='';
+ try{
+  if(!busy&&video.readyState>=2){
+   if(detector){try{const codes=await detector.detect(video);token=codes.length===1?codes[0].rawValue:'';}catch(e){detector=null;}}
+   if(!detector){const scale=Math.min(1,800/video.videoWidth);canvas.width=Math.round(video.videoWidth*scale);canvas.height=Math.round(video.videoHeight*scale);ctx.drawImage(video,0,0,canvas.width,canvas.height);const pixels=ctx.getImageData(0,0,canvas.width,canvas.height);const code=jsQR(pixels.data,pixels.width,pixels.height,{inversionAttempts:'attemptBoth'});token=code?code.data:'';}
+   if(!token){if(!emptySince)emptySince=Date.now();if(Date.now()-emptySince>700)lastToken='';}
+   else{emptySince=0;if(token!==lastToken){lastToken=token;
+    if(!/^DVC\|[a-f0-9]{64}$/.test(token)){say('QR incompatível. Use uma carteirinha com o novo token.','bad');}
+    else{busy=true;$('entry').disabled=$('exit').disabled=true;pending={token,movimento:mode,device,requestId:randomId(),forceNoEntry:false};submit();}
+   }}
+  }
+ }catch(e){say('Não foi possível ler. Ajuste a posição da carteirinha.','warn');}
+ setTimeout(()=>decodeLoop(generation),140);
+}
+$('start').onclick=startCamera;$('switch').onclick=()=>{if(busy)return;facing=facing==='environment'?'user':'environment';startCamera();};
+$('forget').onclick=()=>{if(busy)return;localStorage.removeItem('dalva_device_circula');device='';stopCamera();reset();};
+window.addEventListener('pagehide',stopCamera);
+document.addEventListener('visibilitychange',()=>{if(document.hidden)stopCamera();else if(ready&&device)startCamera();});
+if(/^https:\/\/script\.google\.com\/(?:a\/(?:macros\/)?[^/]+\/)?(?:macros\/)?s\/[\w-]+\/exec$/.test(APPS_SCRIPT_URL)){
+ const frame=document.createElement('iframe');frame.title='Comunicação segura do leitor';frame.src=APPS_SCRIPT_URL+'?view=bridge&channel='+channel;document.body.appendChild(frame);
+ setTimeout(()=>{if(!ready)say('Conexão indisponível. Confira a implantação pública do controle e a URL configurada.','bad');},30000);
+}else say('Leitor ainda não configurado. Procure a gestão.','warn');
+</script></body></html>
