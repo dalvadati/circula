@@ -3,7 +3,7 @@
 </style></head><body><header><h1>E.M. Profª Dalva Dati Ruivo</h1><p>Dalva Circula · Entrada e saída</p></header><main><div class="modes"><button id="entry">ENTRADA</button><button id="exit">SAÍDA</button></div><div class="camera"><video id="video" autoplay muted playsinline></video><div class="guide"></div></div><div id="status" class="status" role="status" aria-live="polite">Conectando…</div><div id="actions"></div><div class="tools"><button id="start">Iniciar câmera</button><button id="switch">Trocar câmera</button><button id="forget">Desvincular aparelho</button></div><small>Posicione uma carteirinha por vez. Afaste o QR após a leitura.</small></main><script src="jsQR.js"></script><script>
 'use strict';
 // ÚNICA CONFIGURAÇÃO PÚBLICA: URL /exec da NOVA implantação do Dalva Circula.
-const APPS_SCRIPT_URL='https://script.google.com/a/macros/educaita.com.br/s/AKfycbzjGodkIYc5bOvKAPA5vwFzX3kOVSBu4mBNwi9VIlh0LR_8EK07sksL8chklHGvXw-06Q/exec';
+const APPS_SCRIPT_URL='https://script.google.com/macros/s/AKfycbxeYtZJ3i5wwIbxigc4_nhQnnoTJG2WTKFPzccSt5dfAKK_I8M6xut1IOzQF4DnpISvdw/exec';
 const $=id=>document.getElementById(id),video=$('video'),status=$('status'),actions=$('actions');
 const randomId=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),x=>x.toString(16).padStart(2,'0')).join('');
 let device=localStorage.getItem('dalva_device_circula')||'';
